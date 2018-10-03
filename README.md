@@ -2,14 +2,14 @@
 lambda function to generate thumbnails for specifid page of a PDF file stored on S3 bucket
 
 ## input (querystring) ##
-bucket: s3 bucket name, make sure the lambda function has access to bucket (not implemented yet, currently "nzfsg.co.nz.mycrm")  
-file: full path to the file including folder/prefix and extension. Required, no default value  
-page: page number to generate thumbnail, default value 1
+`bucket`: s3 bucket name, make sure the lambda function has access to bucket (not implemented yet, currently "nzfsg.co.nz.mycrm")  
+`file`: full path to the file including folder/prefix and extension. **Required**  
+`page`: page number to generate thumbnail. **Optional**, default value **1**
 
 ## output ##
-**200**: `{message: ""}`  
-**400**: `{message: "", err: {} }`  
-**502**: `internal server error, view logs on cloudwatch`
+`200`: `{message: ""}`  
+`400`: `{message: "", err: {} }`  
+`502`: `internal server error, view logs on cloudwatch`
 
 ## helpful Stack Overflow thread ##
 https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda
