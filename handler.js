@@ -34,7 +34,7 @@ module.exports.main = function(event, context, callback) {
     logMessage(`starting to generate thumbnail for ${fileKey} page ${page}`);
 
     //gm frame index is 0-started
-    let pageIdx = page - 1;
+    let pageIdx = page;// - 1;
 
     //generate key for thumbnail file
     let idx = fileKey.lastIndexOf('.');
@@ -81,49 +81,54 @@ module.exports.main = function(event, context, callback) {
                     return;
                 }
                 //generate thumbnail
-                gm(response.Body).selectFrame(pageIdx).setFormat('png').stream( (err, stdout, stderr) => {
-                    if(err) {
-                        msg = `gm conversion`;
-                        logError(msg, err);
-                        callback(null, errorResponse(msg, err));
-                        return;
-                    }
-                    //get thumbnail bytes
-                    let chunks = [];
-                    stdout.on('data', (chunk) => {
-                        chunks.push(chunk);
-                    });
-                    stderr.on('data', (data) => {
-                        msg = `gm write image ${data}`;
-                        logError(msg);
-                    });
-                    stdout.on('end', () => {
-                        logMessage('gm process finished');
-                        let buffer = Buffer.concat(chunks);
-                        //write thumbnail to s3
-                        let thumbPutParams = {
-                            Bucket: bucketName,
-                            Key: thumbKey,
-                            ContentType: 'image/png',
-                            Body: buffer
-                        };
-                        s3.putObject(thumbPutParams, (err, data) => {
-                            if (err) {
-                                msg = 'upload thumbnail to s3';
-                                logError(msg, err);
-                                callback(null, errorResponse(msg, err));
-                                return;
-                            }
-                            //return success response
-                            msg = `Successfully generated thumbnail ${thumbKey}`;
-                            logMessage(msg);
-                            callback(null, successResponse(msg));
+                gm(response.Body)
+                    //.selectFrame(pageIdx)
+                    .setFormat('png')
+                    .resize(100, 100, '^')
+                    .stream( (err, stdout, stderr) => {
+                        if(err) {
+                            msg = `gm conversion`;
+                            logError(msg, err);
+                            callback(null, errorResponse(msg, err));
                             return;
+                        }
+                        //get thumbnail bytes
+                        let chunks = [];
+                        stdout.on('data', (chunk) => {
+                            chunks.push(chunk);
                         });
-                    });
-                });
-            });
-        } 
+                        stderr.on('data', (data) => {
+                            msg = `gm write image ${data}`;
+                            logError(msg);
+                        });
+                        stdout.on('end', () => {
+                            logMessage('gm process finished');
+                            let thumb = Buffer.concat(chunks);
+                            //write thumbnail to s3
+                            let thumbPutParams = {
+                                Bucket: bucketName,
+                                Key: thumbKey,
+                                ContentType: 'image/png',
+                                Body: thumb,
+                                ContentLength: thumb.length
+                            };
+                            s3.putObject(thumbPutParams, (err, data) => {
+                                if (err) {
+                                    msg = 'upload thumbnail to s3';
+                                    logError(msg, err);
+                                    callback(null, errorResponse(msg, err));
+                                    return;
+                                }
+                                //return success response
+                                msg = `Successfully generated thumbnail ${thumbKey}`;
+                                logMessage(msg);
+                                callback(null, successResponse(msg));
+                                return;
+                            }); //s3 put
+                        }); //stdout
+                    }); //gm
+            }); //s3 get
+        } //if not found
         else if (err) {  
             msg = 'check thumbnail exists';
             logError(msg, err);
@@ -137,7 +142,7 @@ module.exports.main = function(event, context, callback) {
             callback(null, successResponse(msg));
             return;
         }
-    });
+    }); //s3 head
 };
 
 const logMessage = function(msg) {
