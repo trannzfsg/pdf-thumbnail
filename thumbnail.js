@@ -1,59 +1,47 @@
 'use strict';
 
-const bucketName = process.env.bucketName;
 const gm = require('gm').subClass({imageMagick: true});
 const AWS = require('aws-sdk');
+const THUMB_WIDTH_MAX = 800;
+const THUMB_HEIGHT_MAX = 800;
+const OUTPUT_FORMAT = 'png';
 
 module.exports.handler = (event, context, callback) => {
     let msg = null;
     //get input parameters
-    //'event.queryStringParameters', 'event.headers' 'event.pathParameters' 'event.body' 
-    //'event.stageVariables' 'event.requestContext'
-    //(typeof event.body === 'string' ? JSON.parse(event.body) : event)
-    let fileKey = null;
-    let page = null;
-    //validate input query string parameter
-    if (event.queryStringParameters !== null && event.queryStringParameters !== undefined) {
-        if (event.queryStringParameters.file !== undefined && event.queryStringParameters.file !== null && event.queryStringParameters.file !== "") {
-            fileKey = event.queryStringParameters.file;
-        }
-        if (event.queryStringParameters.page !== undefined && event.queryStringParameters.page !== null && event.queryStringParameters.page !== "") {
-            page = event.queryStringParameters.page;
-        }
-    }
-    //default page to 1 if not specified
-    if (page === null)
-        page = 1;
-    //validate input
-    if (fileKey === null || isNaN(page) || page < 1) {
-        msg = 'invalid input parameter, requires file and page';
+    let input = getInputParam(event);
+    //validate input (required params)
+    msg = validateInputParam(input);
+    if (msg !== null) {
         logError(msg);
         callback(null, errorResponse(msg));
         return;
     }
-    logMessage(`starting to generate thumbnail for ${fileKey} page ${page}`);
-
+    //default params if not specified
+    input = defaultInputParam(input);
+    //assign values for later use
+    let fileKey = input.fileKey;
+    let page = input.page;
+    let allPages = input.allPages;
+    let bucketName = input.bucketName;
+    let thumbWidth = input.thumbWidth;
+    let thumbHeight = input.thumbHeight;
+    let format = input.format;
+    //log input
+    logMessage(`starting to generate thumbnail for ${bucketName}/${fileKey}, page ${page}, width ${thumbWidth}, height ${thumbHeight}, in ratio`);
+    
     //gm frame index is 0-started
-    let pageIdx = page - 1;
-
     //generate key for thumbnail file
     let idx = fileKey.lastIndexOf('.');
-    if (idx === -1) {
-        msg = `invalid file name, ${fileKey}`;
-        logError(msg);
-        callback(null, errorResponse(msg));
-        return;
-    }
-    //valid extension
     let ext = fileKey.substring(idx + 1).toLowerCase();
-    if (ext !== 'pdf' && ext !== 'tiff' && ext !== 'tif' && ext !== 'gif' && ext !== 'jpg' && ext !== 'png') {
-        msg = `invalid file extension, .${ext}`;
-        logError(msg);
-        callback(null, errorResponse(msg));
-        return;
-    }
-    //thumbnail is png
-    let thumbKey = `${fileKey.substring(0, idx)}_page-${page}.png`;
+    let thumbKeyPrefix = `${fileKey.substring(0, idx)}_page-`;
+    let thumbKeySurfix = `.${format}`;
+
+    //*****temp code for page before allowing generation of all pages**********
+    if (allPages) page = 1;
+    let pageIdx = page - 1;
+    let thumbKey = thumbKeyPrefix + page + thumbKeySurfix;
+    //*************************************************************************
 
     //s3 object
     let s3 = new AWS.S3();
@@ -66,7 +54,7 @@ module.exports.handler = (event, context, callback) => {
     s3.headObject(thumbGetParams, function (err, metadata) {  
         if (err && err.code === 'NotFound') {  
             //log
-            logMessage(`generating thumbnail for ${fileKey}, result file ${thumbKey}`);
+            logMessage(`generating thumbnail, result name ${thumbKey}`);
 
             //get file from s3
             let fileGetParams = {
@@ -168,6 +156,96 @@ module.exports.handler = (event, context, callback) => {
     }); //s3 head
 };
 
+const getInputParam = (event) => {
+    //'event.queryStringParameters', 'event.headers' 'event.pathParameters' 'event.body' 
+    //'event.stageVariables' 'event.requestContext'
+    //(typeof event.body === 'string' ? JSON.parse(event.body) : event)
+    let fileKey = null;
+    let page = null;
+    let allPages = false;
+    let bucketName = null;
+    let thumbWidth = null;
+    let thumbHeight = null;
+    let format = null;
+    //validate input query string parameter
+    if (event.queryStringParameters !== null && event.queryStringParameters !== undefined) {
+        if (event.queryStringParameters.bucket !== undefined && event.queryStringParameters.bucket !== null && event.queryStringParameters.bucket !== "") {
+            bucketName = event.queryStringParameters.bucket;
+        }
+        if (event.queryStringParameters.file !== undefined && event.queryStringParameters.file !== null && event.queryStringParameters.file !== "") {
+            fileKey = event.queryStringParameters.file;
+        }
+        if (event.queryStringParameters.page !== undefined && event.queryStringParameters.page !== null && event.queryStringParameters.page !== "") {
+            page = event.queryStringParameters.page;
+        }
+        if (event.queryStringParameters.width !== undefined && event.queryStringParameters.width !== null && event.queryStringParameters.width !== "") {
+            thumbWidth = event.queryStringParameters.width;
+        }
+        if (event.queryStringParameters.height !== undefined && event.queryStringParameters.height !== null && event.queryStringParameters.height !== "") {
+            thumbHeight = event.queryStringParameters.height;
+        }
+        if (event.queryStringParameters.format !== undefined && event.queryStringParameters.format !== null && event.queryStringParameters.format !== "") {
+            format = event.queryStringParameters.format;
+        }
+    }
+    return {
+        fileKey: fileKey,
+        page: page,
+        allPages: allPages,
+        bucketName: bucketName,
+        thumbWidth: thumbWidth,
+        thumbHeight: thumbHeight,
+        format: format
+    };
+}
+const validateInputParam = (input) => {
+    let msg = null;
+    //validate input
+    //bucket has to be specified
+    if (input.bucketName === null) {
+        msg = 'invalid input parameter, "bucket" is required';
+        return msg;
+    }
+    //file has to be specified
+    if (input.fileKey === null) {
+        msg = 'invalid input parameter, "file" is required';
+        return msg;
+    }
+    //file needs extension
+    let idx = input.fileKey.lastIndexOf('.');
+    if (idx === -1) {
+        msg = `invalid file name, ${input.fileKey}`;
+        return msg;
+    }
+    //valid extension
+    let ext = input.fileKey.substring(idx + 1).toLowerCase();
+    if (ext !== 'pdf' && ext !== 'tiff' && ext !== 'tif' && ext !== 'gif' && ext !== 'jpg' && ext !== 'png') {
+        msg = `invalid file extension, .${ext}`;
+        return msg;
+    }
+    return msg;
+}
+//this function mutates input object
+const defaultInputParam = (input) => {
+    //default to all pages if page not specified
+    if (input.page === null || isNaN(input.page) || input.page < 1) {
+        input.allPages = true;
+        input.page = 0;
+    }
+    //default thumb width
+    if (input.thumbWidth === null || isNaN(input.thumbWidth) || input.thumbWidth < 1 || input.thumbWidth > THUMB_WIDTH_MAX) {
+        input.thumbWidth = THUMB_WIDTH_MAX;
+    }
+    //default thumb height
+    if (input.thumbHeight === null || isNaN(input.thumbHeight) || input.thumbHeight < 1 || input.thumbHeight > THUMB_HEIGHT_MAX) {
+        input.thumbHeight = THUMB_HEIGHT_MAX;
+    }
+    //default output format
+    if (input.format === null || (input.format !== 'png' && input.format !== 'jpg')) {
+        input.format = OUTPUT_FORMAT;
+    }
+    return input;
+}
 const logMessage = (msg) => {
     console.log(msg);
 }

@@ -28,8 +28,6 @@ package:
 functions:
   thumbnail:
     handler: thumbnail.handler
-    environment:
-      bucketName: ${self:custom.bucketName}
     events:
       - http:
           method: get
