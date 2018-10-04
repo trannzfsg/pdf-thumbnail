@@ -21,7 +21,7 @@ https://dnkw5xa481.execute-api.ap-southeast-2.amazonaws.com/dev/thumbnail?bucket
 ## helpful resources ##
 readme format: https://github.com/tchapi/markdown-cheatsheet/blob/master/README.md  
 gm lib: https://github.com/aheckmann/gm/blob/e715cbdaacad21504fc04f6933be5cae1812501e/lib/command.js  
-sample code: https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda
+sample code: https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda  
 multi-pages thumbnail: https://www.experts-exchange.com/articles/23019/Convert-a-multi-page-PDF-file-into-multiple-image-files.html  
 
 ## to do ##
