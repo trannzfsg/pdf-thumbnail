@@ -16,8 +16,10 @@ https://dnkw5xa481.execute-api.ap-southeast-2.amazonaws.com/dev/thumbnail?file=F
 MyCRM/a-adfda-and-d-adfad_Credi_13-34-22-67672.pdf
 
 ## helpful resources ##
-https://github.com/tchapi/markdown-cheatsheet/blob/master/README.md
-https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda
+readme format: https://github.com/tchapi/markdown-cheatsheet/blob/master/README.md
+gm lib: https://github.com/aheckmann/gm/blob/e715cbdaacad21504fc04f6933be5cae1812501e/lib/command.js
+sample code: https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda
+multi-pages thumbnail: https://www.experts-exchange.com/articles/23019/Convert-a-multi-page-PDF-file-into-multiple-image-files.html
 
 ## current problem ##
 thumbnail is 0 size (check gm code)

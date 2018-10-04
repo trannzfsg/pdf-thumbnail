@@ -26,8 +26,8 @@ package:
     - node_modules/*
 
 functions:
-  main:
-    handler: handler.main
+  thumbnail:
+    handler: thumbnail.handler
     environment:
       bucketName: ${self:custom.bucketName}
     events:
