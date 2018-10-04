@@ -15,16 +15,19 @@ lambda function to generate thumbnails for specifid page of a PDF file stored on
 `502`: `internal server error, view logs on cloudwatch`  
 Output thumbnail image will be stored in same folder of input file, with '\_page-{page}' added before file extension  
 
-## to test ##
-https://dnkw5xa481.execute-api.ap-southeast-2.amazonaws.com/dev/thumbnail?bucket=nzfsg.co.nz.mycrm&file=MyCRM/a-adfda-and-d-adfad_Credi_13-34-22-67672.pdf  
-
 ## helpful resources ##
 readme format: https://github.com/tchapi/markdown-cheatsheet/blob/master/README.md  
 gm lib: https://github.com/aheckmann/gm/blob/e715cbdaacad21504fc04f6933be5cae1812501e/lib/command.js  
 sample code: https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda  
 multi-pages thumbnail: https://www.experts-exchange.com/articles/23019/Convert-a-multi-page-PDF-file-into-multiple-image-files.html  
 
+## to test ##
+https://dnkw5xa481.execute-api.ap-southeast-2.amazonaws.com/dev/thumbnail?bucket=nzfsg.co.nz.mycrm&file=MyCRM/a-adfda-and-d-adfad_Credi_13-34-22-67672.pdf  
+test other input file formats (png jpg tiff)  
+
 ## to do ##
 thumbnail resize to width/height  
 generate all pages in 1 request  
 refactor code  
+enable other environments (sit/uat/prod)  
+grant access to environment specific buckets (maybe grant access to all buckets in account?)  
