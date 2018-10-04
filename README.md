@@ -24,5 +24,7 @@ gm lib: https://github.com/aheckmann/gm/blob/e715cbdaacad21504fc04f6933be5cae181
 sample code: https://stackoverflow.com/questions/51621169/convert-pdf-pages-into-images-using-aws-s3-and-lambda
 multi-pages thumbnail: https://www.experts-exchange.com/articles/23019/Convert-a-multi-page-PDF-file-into-multiple-image-files.html  
 
-## current problem ##
-thumbnail is 0 size (check gm code)
+## to do ##
+thumbnail resize to width/height  
+generate all pages in 1 request  
+refactor code  
