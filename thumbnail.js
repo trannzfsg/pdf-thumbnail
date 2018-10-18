@@ -1,10 +1,14 @@
 'use strict';
 
 const gm = require('gm').subClass({imageMagick: true});
+const streamSplitter = require('stream-splitter');
+const request = require('request');
 const AWS = require('aws-sdk');
-const THUMB_WIDTH_MAX = 800;
-const THUMB_HEIGHT_MAX = 800;
+const s3 = new AWS.S3();
+const THUMB_WIDTH_MAX = 1000;
+const THUMB_HEIGHT_MAX = 1000;
 const OUTPUT_FORMAT = 'png';
+const PNG_SPLITTER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00];
 
 module.exports.handler = (event, context, callback) => {
     let msg = null;
@@ -20,15 +24,16 @@ module.exports.handler = (event, context, callback) => {
     //default params if not specified
     input = defaultInputParam(input);
     //assign values for later use
+    let bucketName = input.bucketName;
     let fileKey = input.fileKey;
+    let presignedUrl = input.presignedUrl;
     let page = input.page;
     let allPages = input.allPages;
-    let bucketName = input.bucketName;
     let thumbWidth = input.thumbWidth;
     let thumbHeight = input.thumbHeight;
     let format = input.format;
     //log input
-    logMessage(`starting to generate thumbnail for ${bucketName}/${fileKey}, page ${page}, width ${thumbWidth}, height ${thumbHeight}, in ratio`);
+    logMessage(`starting to generate thumbnail for ${bucketName}/${fileKey}, ${(allPages ? 'all pages' : 'page '+page)}, width ${thumbWidth}, height ${thumbHeight}, in ratio`);
     
     //gm frame index is 0-started
     //generate key for thumbnail file
@@ -37,24 +42,20 @@ module.exports.handler = (event, context, callback) => {
     let thumbKeyPrefix = `${fileKey.substring(0, idx)}_page-`;
     let thumbKeySurfix = `.${format}`;
 
-    //*****temp code for page before allowing generation of all pages**********
+    //if all pages, starts from page 1
     if (allPages) page = 1;
     let pageIdx = page - 1;
     let thumbKey = thumbKeyPrefix + page + thumbKeySurfix;
-    //*************************************************************************
-
-    //s3 object
-    let s3 = new AWS.S3();
 
     //test if thumbnail exists
     let thumbGetParams = {
         Bucket: bucketName,
-        Key: thumbKey
+        Key: (allPages ? thumbKeyPrefix + '0' : thumbKey)
     };
-    s3.headObject(thumbGetParams, function (err, metadata) {  
+    s3.headObject(thumbGetParams, function (err, metadata) { 
         if (err && err.code === 'NotFound') {  
             //log
-            logMessage(`generating thumbnail, result name ${thumbKey}`);
+            logMessage('generating thumbnail, result name ' + thumbKeyPrefix + (allPages ? 'X' : page) + thumbKeySurfix + (allPages ? ', all pages' : ''));
 
             //get file from s3
             let fileGetParams = {
@@ -70,74 +71,8 @@ module.exports.handler = (event, context, callback) => {
                 }
                 logMessage(`s3 pdf response length ${response.Body.length}`);
 
-                //initialise gm image
-                let image = gm(response.Body).selectFrame(pageIdx).flatten();
-                logMessage(`file extension - ${ext}, page ${page}, direct load to gm`);
-
-                //get actual size
-                image.size( (err, size) => {
-                    if(err) {
-                        msg = `gm get size`;
-                        logError(msg, err);
-                        callback(null, errorResponse(msg, err));
-                        return;
-                    }
-                    logMessage(`pdf page size ${JSON.stringify(size)}`);
-                    
-                    //generate thumbnail
-                    image
-                        .setFormat('png')
-                        //.resize(100, 100, '^')
-                        .stream( (err, stdout, stderr) => {
-                            if(err) {
-                                msg = `gm conversion`;
-                                logError(msg, err);
-                                callback(null, errorResponse(msg, err));
-                                return;
-                            }
-                            //get thumbnail bytes
-                            let chunks = [];
-                            stdout.on('data', (chunk) => {
-                                chunks.push(chunk);
-                            });
-                            stderr.on('data', (data) => {
-                                msg = `gm write image ${data}`;
-                                logError(msg);
-                            });
-                            stdout.on('end', () => {
-                                logMessage('gm process finished');
-                                let thumb = Buffer.concat(chunks);
-                                //check thumbnail size
-                                if (thumb.length == 0){
-                                    msg = `gm conversion size 0`;
-                                    logError(msg);
-                                    callback(null, errorResponse(msg));
-                                    return;
-                                }
-                                //write thumbnail to s3
-                                let thumbPutParams = {
-                                    Bucket: bucketName,
-                                    Key: thumbKey,
-                                    ContentType: 'image/png',
-                                    Body: thumb,
-                                    ContentLength: thumb.length
-                                };
-                                s3.putObject(thumbPutParams, (err, data) => {
-                                    if (err) {
-                                        msg = 'upload thumbnail to s3';
-                                        logError(msg, err);
-                                        callback(null, errorResponse(msg, err));
-                                        return;
-                                    }
-                                    //return success response
-                                    msg = `Successfully generated thumbnail ${thumbKey}`;
-                                    logMessage(msg);
-                                    callback(null, successResponse(msg));
-                                    return;
-                                }); //s3 put
-                            }); //stdout
-                        }); //gm stream
-                }); //gm size
+                //generate thumbnail on s3 response
+                generateThumbnail(callback, response, bucketName, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix, thumbKeySurfix);
             }); //s3 get
         } //if not found
         else if (err) {  
@@ -148,7 +83,7 @@ module.exports.handler = (event, context, callback) => {
         }
         else {  
             //return success response
-            msg = `Thumbnail exists ${thumbKey}`;
+            msg = `Thumbnail exists ${(allPages ? thumbKeyPrefix + '0' : thumbKey)}`;
             logMessage(msg);
             callback(null, successResponse(msg));
             return;
@@ -156,43 +91,192 @@ module.exports.handler = (event, context, callback) => {
     }); //s3 head
 };
 
+const generateThumbnail = (callback, response, bucketName, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix, thumbKeySurfix) => {
+    let msg = null;
+    //load pdf with gm
+    let image;
+    let pageForSize;
+    if (allPages){
+        image = gm(response.Body);
+        pageForSize = gm(response.Body).selectFrame(0);
+        logMessage(`file extension - ${ext}, all pages`);
+    }
+    else{
+        image = gm(response.Body).selectFrame(pageIdx);
+        pageForSize = image;
+        logMessage(`file extension - ${ext}, page ${page}`);
+    }
+
+    //get actual size
+    pageForSize.size( (err, size) => {
+        if(err) {
+            msg = `gm get size`;
+            logError(msg, err);
+            callback(null, errorResponse(msg, err));
+            return;
+        }
+
+        //get thumb dimensions
+        let thumbDim = thumbnailDimensions(thumbWidth, thumbHeight, size.width, size.height);
+        logMessage(`input dim: ${thumbWidth}x${thumbHeight}, page dim: ${size.width}x${size.height}, thumb dim: ${thumbDim.width}x${thumbDim.height}`);
+        thumbWidth = thumbDim.width;
+        thumbHeight = thumbDim.height;
+        
+        //generate thumbnail
+        let splitBuffer = new Buffer(PNG_SPLITTER); //png headers
+        let thumbStream = streamSplitter(splitBuffer);
+        thumbStream.on('done', function() {
+            msg = `successfully generated all thumbnails`;
+            logMessage(msg);
+            callback(null, successResponse(msg));
+            return;
+        });
+        thumbStream.on('error', function(err) {
+            msg = `stream splitter`;
+            logError(msg, err);
+            callback(null, errorResponse(msg, err));
+            return;
+        });
+        let pageNumber = (allPages ? 1 : page);
+        let counter = 0;
+        thumbStream.on('token', (token) => {
+            if (token.length > 0) {
+                //logs
+                if (counter === 0)
+                    logMessage('gm process finished');
+
+                //get thumb key
+                let thumbKey = thumbKeyPrefix + pageNumber + '.' + format;
+                
+                //get thumb stream (png header + content)
+                let thumb = Buffer.concat([splitBuffer,token]);
+
+                //write thumbnail to s3
+                //write page 0 (placeholder) if all pages, as a flag this is done before
+                if (allPages && counter === 0){
+                    let thumbPutParamsAllPages = {
+                        Bucket: bucketName,
+                        Key: thumbKeyPrefix + '0',
+                        ContentType: 'text/plain',
+                        Body: 'placeholder',
+                        ContentLength: 11
+                    };
+                    s3.putObject(thumbPutParamsAllPages, (err, data) => {
+                        if (err) {
+                            msg = 'upload placeholder to s3';
+                            logError(msg, err);
+                            callback(null, errorResponse(msg, err));
+                            return;
+                        }
+                        msg = `Successfully uploaded placeholder ${thumbKeyPrefix}0`;
+                        logMessage(msg);
+                    });
+                }
+                //write thumbnail for page X
+                let thumbPutParams = {
+                    Bucket: bucketName,
+                    Key: thumbKey,
+                    ContentType: `image/${format}`,
+                    Body: thumb,
+                    ContentLength: thumb.length
+                };
+                s3.putObject(thumbPutParams, (err, data) => {
+                    if (err) {
+                        msg = 'upload thumbnail to s3';
+                        logError(msg, err);
+                        callback(null, errorResponse(msg, err));
+                        return;
+                    }
+                    //log
+                    msg = `Successfully uploaded thumbnail ${thumbKey}`;
+                    logMessage(msg);
+                }); //s3 put
+                
+                pageNumber++;
+                counter++;
+            }
+        });
+        image
+            .setFormat(format)
+            .filter('Cubic')
+            .resize(thumbWidth, thumbHeight)
+            .out('+adjoin') //if multi page
+            .stream( /*(err, stdout, stderr) => {
+                if(err) {
+                    msg = `gm conversion`;
+                    logError(msg, err);
+                    callback(null, errorResponse(msg, err));
+                    return;
+                }
+                //get thumbnail bytes
+                let chunks = [];
+                stdout.on('data', (chunk) => {
+                    chunks.push(chunk);
+                });
+                stderr.on('data', (data) => {
+                    msg = `gm write image ${data}`;
+                    logError(msg);
+                });
+                stdout.on('end', () => {
+                    logMessage('gm process finished');
+                    let thumb = Buffer.concat(chunks);
+                    //check thumbnail size
+                    if (thumb.length == 0){
+                        msg = `gm conversion size 0`;
+                        logError(msg);
+                        callback(null, errorResponse(msg));
+                        return;
+                    }
+                    logMessage('thumb total length' + thumb.length);
+                }); //stdout
+            }*/) //gm stream
+            .pipe(thumbStream);
+    }); //gm size
+}
+
+//input related functions
 const getInputParam = (event) => {
     //'event.queryStringParameters', 'event.headers' 'event.pathParameters' 'event.body' 
     //'event.stageVariables' 'event.requestContext'
     //(typeof event.body === 'string' ? JSON.parse(event.body) : event)
+    let bucketName = null;
     let fileKey = null;
+    let presignedUrl = null;
     let page = null;
     let allPages = false;
-    let bucketName = null;
     let thumbWidth = null;
     let thumbHeight = null;
     let format = null;
     //validate input query string parameter
     if (event.queryStringParameters !== null && event.queryStringParameters !== undefined) {
-        if (event.queryStringParameters.bucket !== undefined && event.queryStringParameters.bucket !== null && event.queryStringParameters.bucket !== "") {
+        if (event.queryStringParameters.bucket !== undefined && event.queryStringParameters.bucket !== null && event.queryStringParameters.bucket !== '') {
             bucketName = event.queryStringParameters.bucket;
         }
-        if (event.queryStringParameters.file !== undefined && event.queryStringParameters.file !== null && event.queryStringParameters.file !== "") {
+        if (event.queryStringParameters.file !== undefined && event.queryStringParameters.file !== null && event.queryStringParameters.file !== '') {
             fileKey = event.queryStringParameters.file;
         }
-        if (event.queryStringParameters.page !== undefined && event.queryStringParameters.page !== null && event.queryStringParameters.page !== "") {
+        if (event.queryStringParameters.presignedUrl !== undefined && event.queryStringParameters.presignedUrl !== null && event.queryStringParameters.presignedUrl !== '') {
+            presignedUrl = event.queryStringParameters.presignedUrl;
+        }
+        if (event.queryStringParameters.page !== undefined && event.queryStringParameters.page !== null && event.queryStringParameters.page !== '') {
             page = event.queryStringParameters.page;
         }
-        if (event.queryStringParameters.width !== undefined && event.queryStringParameters.width !== null && event.queryStringParameters.width !== "") {
+        if (event.queryStringParameters.width !== undefined && event.queryStringParameters.width !== null && event.queryStringParameters.width !== '') {
             thumbWidth = event.queryStringParameters.width;
         }
-        if (event.queryStringParameters.height !== undefined && event.queryStringParameters.height !== null && event.queryStringParameters.height !== "") {
+        if (event.queryStringParameters.height !== undefined && event.queryStringParameters.height !== null && event.queryStringParameters.height !== '') {
             thumbHeight = event.queryStringParameters.height;
         }
-        if (event.queryStringParameters.format !== undefined && event.queryStringParameters.format !== null && event.queryStringParameters.format !== "") {
+        if (event.queryStringParameters.format !== undefined && event.queryStringParameters.format !== null && event.queryStringParameters.format !== '') {
             format = event.queryStringParameters.format;
         }
     }
     return {
+        bucketName: bucketName,
         fileKey: fileKey,
+        presignedUrl: presignedUrl,
         page: page,
         allPages: allPages,
-        bucketName: bucketName,
         thumbWidth: thumbWidth,
         thumbHeight: thumbHeight,
         format: format
@@ -201,24 +285,44 @@ const getInputParam = (event) => {
 const validateInputParam = (input) => {
     let msg = null;
     //validate input
-    //bucket has to be specified
-    if (input.bucketName === null) {
+    //bucket has to be specified, or presignedUrl
+    if (input.bucketName === null && input.presignedUrl === null) {
         msg = 'invalid input parameter, "bucket" is required';
         return msg;
     }
-    //file has to be specified
-    if (input.fileKey === null) {
+    //file has to be specified, or presignedUrl
+    if (input.fileKey === null && input.presignedUrl === null) {
         msg = 'invalid input parameter, "file" is required';
         return msg;
     }
-    //file needs extension
-    let idx = input.fileKey.lastIndexOf('.');
-    if (idx === -1) {
-        msg = `invalid file name, ${input.fileKey}`;
+    //file needs valid extension
+    let file = null;
+    if (input.presignedUrl !== null) {
+        let idx1 = input.presignedUrl.indexOf('?');
+        let idx2 = input.presignedUrl.indexOf('#');
+        if (idx1 >= 0)
+            file = input.presignedUrl.substring(0, idx1);
+        else if (idx2 >= 0)
+            file = input.presignedUrl.substring(0, idx2);
+        else
+            file = input.presignedUrl;
+    }
+    else if (input.fileKey !== null) {
+        file = input.fileKey;
+    }
+    //invalid input file format
+    if (file === null) {
+        msg = `invalid file name, ${file}`;
         return msg;
     }
-    //valid extension
-    let ext = input.fileKey.substring(idx + 1).toLowerCase();
+    //no extension
+    let idx = file.lastIndexOf('.');
+    if (idx === -1) {
+        msg = `invalid file name, ${file}`;
+        return msg;
+    }
+    //invalid extension
+    let ext = file.substring(idx + 1).toLowerCase();
     if (ext !== 'pdf' && ext !== 'tiff' && ext !== 'tif' && ext !== 'gif' && ext !== 'jpg' && ext !== 'png') {
         msg = `invalid file extension, .${ext}`;
         return msg;
@@ -246,6 +350,27 @@ const defaultInputParam = (input) => {
     }
     return input;
 }
+
+//thumbnail dimensions (in proportion of original page width and height)
+const thumbnailDimensions = (inputWidth, inputHeight, pageWidth, pageHeight) => {
+    let thumbWidth = null;
+    let thumbHeight = null;
+    if (pageWidth <= inputWidth && pageHeight <= inputHeight) {
+        thumbWidth = pageWidth;
+        thumbHeight = pageHeight;
+    }
+    else {
+        let scalingFactor = Math.min(inputWidth/parseFloat(pageWidth), inputHeight/parseFloat(pageHeight));
+        thumbWidth = Math.floor(pageWidth * scalingFactor);
+        thumbHeight = Math.floor(pageHeight * scalingFactor);
+    }
+    return {
+        width: thumbWidth,
+        height: thumbHeight
+    }
+}
+
+//logging
 const logMessage = (msg) => {
     console.log(msg);
 }
@@ -255,6 +380,8 @@ const logError = (msg, err) => {
         errmsg += `, ${JSON.stringify({ message: err.message, stack: err.stack })}`;
     console.log(errmsg);
 }
+
+//response format
 const responseTemplate = () => {
     return {
             statusCode: null,
@@ -280,11 +407,4 @@ const successResponse = (msg) => {
     httpres.statusCode = 200;
     httpres.body = JSON.stringify(resbody);
     return httpres;
-}
-const guid = () => {
-  return s4() + s4() + '-' + s4() + '-' + s4() + '-' + s4() + '-' + s4() + s4() + s4();
-}
-
-const s4 = () => {
-  return Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
 }
