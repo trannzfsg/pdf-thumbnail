@@ -1,7 +1,7 @@
 service: pdf-thumbnail
 
-custom: 
-  bucketName: nzfsg.co.nz.mycrm
+custom:
+  bucketName: dev-mycrm-thumbnail
 
 provider:
   name: aws
