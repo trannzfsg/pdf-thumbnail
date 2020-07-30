@@ -5,10 +5,10 @@ custom:
 
 provider:
   name: aws
-  runtime: nodejs8.10
+  runtime: nodejs12.x
   stage: dev
   profile: aws-apikey-dev
-  memorySize: 128
+  memorySize: 1024
   timeout: 300
   region: ap-southeast-2
   iamRoleStatements:
@@ -21,13 +21,13 @@ provider:
         - arn:aws:s3:::${self:custom.bucketName}/*
         - arn:aws:s3:::${self:custom.bucketName}
 
-package:
-  include:
-    - node_modules/*
-
 functions:
   thumbnail:
     handler: thumbnail.handler
+    layers:
+      - arn:aws:lambda:ap-southeast-2:001256626925:layer:image-magick:1
+      - arn:aws:lambda:ap-southeast-2:175033217214:layer:graphicsmagick:2
+      - arn:aws:lambda:ap-southeast-2:764866452798:layer:ghostscript:8
     events:
       - http:
           method: get

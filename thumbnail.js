@@ -2,16 +2,14 @@
 
 const gm = require('gm').subClass({imageMagick: true});
 const streamSplitter = require('stream-splitter');
-const request = require('request');
 const AWS = require('aws-sdk');
-const base64js = require('base64-js')
 const s3 = new AWS.S3();
 const THUMB_WIDTH_MAX = 1000;
 const THUMB_HEIGHT_MAX = 1000;
 const OUTPUT_FORMAT = 'png';
 const PNG_SPLITTER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00];
 
-module.exports.handler = (event, context, callback) => {
+module.exports.handler = (event, _context, callback) => {
     let msg = null;
     //get input parameters
     let input = getInputParam(event);
@@ -27,7 +25,6 @@ module.exports.handler = (event, context, callback) => {
     //assign values for later use
     let bucketName = input.bucketName;
     let fileKey = input.fileKey;
-    let presignedUrl = input.presignedUrl;
     let page = input.page;
     let allPages = input.allPages;
     let thumbWidth = input.thumbWidth;
@@ -47,66 +44,52 @@ module.exports.handler = (event, context, callback) => {
     if (allPages) page = 1;
     let pageIdx = page - 1;
 
-    //if given, use presigned url to get source
-    if (presignedUrl !== null) {
-        request(presignedUrl, (err, response, body) => {
-            if (err) {  
-                msg = 'get file from presigned url';
-                logError(msg, err);
-                callback(null, errorResponse(msg, err));
-                return;
-            }
-            generateThumbnail(callback, body, null, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix, thumbKeySurfix);
-        });
-    }
-    //otherwise use bucket and file to get source
-    else {
-        //test if thumbnail exists
-        let thumbGetParams = {
-            Bucket: bucketName,
-            Key: thumbKeyPrefix + (allPages ? '0' : page + thumbKeySurfix)
-        };
-        s3.headObject(thumbGetParams, function (err, metadata) { 
-            if (err && err.code === 'NotFound') {  
-                //log
-                logMessage('generating thumbnail, result name ' + thumbKeyPrefix + (allPages ? 'X' : page) + thumbKeySurfix + (allPages ? ', all pages' : ''));
+    //use bucket and file to get source
+    //test if thumbnail exists
+    let thumbGetParams = {
+        Bucket: bucketName,
+        Key: thumbKeyPrefix + (allPages ? '0' : page + thumbKeySurfix)
+    };
+    s3.headObject(thumbGetParams, function (err, _metadata) { 
+        if (err && err.code === 'NotFound') {  
+            //log
+            logMessage('generating thumbnail, result name ' + thumbKeyPrefix + (allPages ? 'X' : page) + thumbKeySurfix + (allPages ? ', all pages' : ''));
 
-                //get file from s3
-                let fileGetParams = {
-                    Bucket: bucketName,
-                    Key: fileKey
-                };
-                s3.getObject(fileGetParams, (err, response) => {
-                    if (err) {
-                        msg = 'S3 get object';
-                        logError(msg, err);
-                        callback(null, errorResponse(msg, err));
-                        return;
-                    }
-                    logMessage(`s3 pdf response length ${response.Body.length}`);
+            //get file from s3
+            let fileGetParams = {
+                Bucket: bucketName,
+                Key: fileKey
+            };
+            s3.getObject(fileGetParams, (err, response) => {
+                if (err) {
+                    msg = 'S3 get object';
+                    logError(msg, err);
+                    callback(null, errorResponse(msg, err));
+                    return;
+                }
+                logMessage(`s3 pdf response length ${response.Body.length}`);
 
-                    //generate thumbnail on s3 response
-                    generateThumbnail(callback, response.Body, bucketName, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix, thumbKeySurfix);
-                }); //s3 get
-            } //if not found
-            else if (err) {  
-                msg = 'check thumbnail exists';
-                logError(msg, err);
-                callback(null, errorResponse(msg, err));
-                return;
-            }
-            else {  
-                //return success response
-                msg = 'Thumbnail exists ' + thumbKeyPrefix + (allPages ? '0' : page + thumbKeySurfix);
-                logMessage(msg);
-                callback(null, successResponse(msg));
-                return;
-            }
-        }); //s3 head
-    } //else (presignedUrl not null)
+                //generate thumbnail on s3 response
+                generateThumbnail(callback, response.Body, bucketName, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix);
+            }); //s3 get
+        } //if not found
+        else if (err) {  
+            msg = 'check thumbnail exists';
+            logError(msg, err);
+            callback(null, errorResponse(msg, err));
+            return;
+        }
+        else {  
+            //return success response
+            msg = 'Thumbnail exists ' + thumbKeyPrefix + (allPages ? '0' : page + thumbKeySurfix);
+            logMessage(msg);
+            callback(null, successResponse(msg));
+            return;
+        }
+    }); //s3 head
 };
 
-const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix, thumbKeySurfix) => {
+const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx, ext, thumbWidth, thumbHeight, format, thumbKeyPrefix) => {
     let msg = null;
     //load pdf with gm
     let image;
@@ -138,22 +121,12 @@ const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx
         thumbHeight = thumbDim.height;
         
         //generate thumbnail
-        let splitBuffer = new Buffer(PNG_SPLITTER); //png headers
+        let splitBuffer = new Buffer.from(PNG_SPLITTER); //png headers
         let thumbStream = streamSplitter(splitBuffer);
-        let thumbArray = [];
         thumbStream.on('done', function() {
             msg = `successfully generated all thumbnails`;
             logMessage(msg);
-            //if has bucket, return message only, thumb saved to bucket
-            let data = null;
-            if (bucketName === null) {
-                let thumbBase64Encoded = base64EncodeThumbArray(thumbArray);
-                data = {
-                    number: thumbBase64Encoded.length,
-                    thumbBase64: thumbBase64
-                };
-            }
-            callback(null, successResponse(msg, data));
+            callback(null, successResponse(msg));
             return;
         });
         thumbStream.on('error', function(err) {
@@ -175,7 +148,6 @@ const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx
                 
                 //get thumb stream (png header + content)
                 let thumb = Buffer.concat([splitBuffer,token]);
-                thumbArray.push(thumb);
 
                 //only store to s3 if have bucket name passed in
                 if (bucketName !== null) {
@@ -189,7 +161,7 @@ const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx
                             Body: 'placeholder',
                             ContentLength: 11
                         };
-                        s3.putObject(thumbPutParamsAllPages, (err, data) => {
+                        s3.putObject(thumbPutParamsAllPages, (err, _data) => {
                             if (err) {
                                 msg = 'upload placeholder to s3';
                                 logError(msg, err);
@@ -208,7 +180,7 @@ const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx
                         Body: thumb,
                         ContentLength: thumb.length
                     };
-                    s3.putObject(thumbPutParams, (err, data) => {
+                    s3.putObject(thumbPutParams, (err, _data) => {
                         if (err) {
                             msg = 'upload thumbnail to s3';
                             logError(msg, err);
@@ -230,35 +202,7 @@ const generateThumbnail = (callback, gmbody, bucketName, allPages, page, pageIdx
             .filter('Cubic')
             .resize(thumbWidth, thumbHeight)
             .out('+adjoin') //if multi page
-            .stream( /*(err, stdout, stderr) => {
-                if(err) {
-                    msg = `gm conversion`;
-                    logError(msg, err);
-                    callback(null, errorResponse(msg, err));
-                    return;
-                }
-                //get thumbnail bytes
-                let chunks = [];
-                stdout.on('data', (chunk) => {
-                    chunks.push(chunk);
-                });
-                stderr.on('data', (data) => {
-                    msg = `gm write image ${data}`;
-                    logError(msg);
-                });
-                stdout.on('end', () => {
-                    logMessage('gm process finished');
-                    let thumb = Buffer.concat(chunks);
-                    //check thumbnail size
-                    if (thumb.length == 0){
-                        msg = `gm conversion size 0`;
-                        logError(msg);
-                        callback(null, errorResponse(msg));
-                        return;
-                    }
-                    logMessage('thumb total length' + thumb.length);
-                }); //stdout
-            }*/) //gm stream
+            .stream() //gm stream
             .pipe(thumbStream);
     }); //gm size
 }
@@ -270,7 +214,6 @@ const getInputParam = (event) => {
     //(typeof event.body === 'string' ? JSON.parse(event.body) : event)
     let bucketName = null;
     let fileKey = null;
-    let presignedUrl = null;
     let page = null;
     let allPages = false;
     let thumbWidth = null;
@@ -283,10 +226,6 @@ const getInputParam = (event) => {
         }
         if (event.queryStringParameters.file !== undefined && event.queryStringParameters.file !== null && event.queryStringParameters.file !== '') {
             fileKey = event.queryStringParameters.file;
-        }
-        if (event.queryStringParameters.presignedUrl !== undefined && event.queryStringParameters.presignedUrl !== null && event.queryStringParameters.presignedUrl !== '') {
-            presignedUrl = event.queryStringParameters.presignedUrl;
-            fileKey = getFileFromUrl(presignedUrl);
         }
         if (event.queryStringParameters.page !== undefined && event.queryStringParameters.page !== null && event.queryStringParameters.page !== '') {
             page = event.queryStringParameters.page;
@@ -304,7 +243,6 @@ const getInputParam = (event) => {
     return {
         bucketName: bucketName,
         fileKey: fileKey,
-        presignedUrl: presignedUrl,
         page: page,
         allPages: allPages,
         thumbWidth: thumbWidth,
@@ -315,24 +253,18 @@ const getInputParam = (event) => {
 const validateInputParam = (input) => {
     let msg = null;
     //validate input
-    //bucket has to be specified, or presignedUrl
-    if (input.bucketName === null && input.presignedUrl === null) {
-        msg = 'invalid input parameter, "bucket" or "presignedUrl" is required';
+    //bucket has to be specified
+    if (input.bucketName === null) {
+        msg = 'invalid input parameter, "bucket" is required';
         return msg;
     }
-    //file has to be specified, or presignedUrl
+    //file has to be specified
     if (input.fileKey === null) {
-        msg = 'invalid input parameter, "fileKey" is required. If "presignedUrl" is used, please make sure file has valid extension';
+        msg = 'invalid input parameter, "fileKey" is required';
         return msg;
     }
     //file needs valid extension
-    let file = null;
-    if (input.presignedUrl !== null) {
-        file = getFileFromUrl(input.presignedUrl);
-    }
-    else if (input.fileKey !== null) {
-        file = getFileFromUrl(input.fileKey);
-    }
+    let file = getFileFromUrl(input.fileKey);
     //invalid input file format
     if (file === null) {
         msg = `invalid file name, ${file}`;
@@ -454,11 +386,4 @@ const successResponse = (msg, data) => {
     httpres.statusCode = 200;
     httpres.body = JSON.stringify(resbody);
     return httpres;
-}
-const base64EncodeThumbArray = (thumbArray) => {
-    let encoded = [];
-    thumbArray.forEach(function(thumb) {
-        encoded.push(base64js.fromByteArray(thumb));
-    });
-    return encoded;
 }
