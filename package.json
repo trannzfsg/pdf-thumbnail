@@ -24,6 +24,6 @@
     "stream-splitter": "^0.3.2"
   },
   "devDependencies": {
-    "aws-sdk": "^2.723.0"
+    "aws-sdk": "^2.814.0"
   }
 }
